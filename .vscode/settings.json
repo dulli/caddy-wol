@@ -1,0 +1,35 @@
+{
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/node_modules/*/**": true,
+        "**/build/*/**": true
+    },
+
+    "editor.rulers": [80, 100, 120],
+    "editor.detectIndentation": false,
+    "editor.formatOnSave": true,
+    "editor.formatOnType": false,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+
+    "python.analysis.extraPaths": ["./api", "./tools", "./scripts"],
+    "[python]": {
+        "editor.defaultFormatter": null,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": true
+        }
+    },
+    "python.formatting.provider": "black",
+
+    "[go]": {
+        "editor.defaultFormatter": null
+    },
+    "go.formatTool": "gofumpt",
+
+    "spellright.language": ["de", "en"],
+    "spellright.documentTypes": ["markdown", "latex"],
+
+    "[svg]": {
+        "editor.defaultFormatter": null
+    }
+}

@@ -1,0 +1,16 @@
+{
+  // See https://go.microsoft.com/fwlink/?LinkId=733558
+  // for the documentation about the tasks.json format
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Caddy ",
+      "type": "shell",
+      "command": "xcaddy build --with github.com/dulli/caddy-wol=${workspaceFolder} --output ${workspaceFolder}/bin/caddy-with-wol",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}
