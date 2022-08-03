@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -19,8 +20,11 @@ func init() {
 
 type Middleware struct {
 	MAC string `json:"mac,omitempty"`
+	// TODO: add more configuration (throttle time, target ip)
 
+	key             string
 	logger          *zap.Logger
+	pool            *caddy.UsagePool
 	magicPacket     []byte
 	broadcastSocket net.Conn
 }
@@ -33,7 +37,10 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 }
 
 func (m *Middleware) Provision(ctx caddy.Context) error {
+	m.key = fmt.Sprintf("wol-%s", m.MAC)
 	m.logger = ctx.Logger(m)
+	m.pool = caddy.NewUsagePool()
+
 	mac, err := net.ParseMAC(m.MAC)
 	if err != nil {
 		return err
@@ -50,13 +57,23 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 }
 
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	// TODO: throttle magic packet sending to not flood the network
-	m.logger.Info("dispatched magic packet",
-		zap.String("packet", fmt.Sprintf("0x%x", m.magicPacket)),
-	)
-	_, err := m.broadcastSocket.Write(m.magicPacket)
-	if err != nil {
-		return err
+	_, throttled := m.pool.LoadOrStore(m.key, true)
+	if throttled {
+		_, err := m.pool.Delete(m.key)
+		if err != nil {
+			return err
+		}
+	} else {
+		m.logger.Info("dispatched magic packet",
+			zap.String("mac", m.MAC),
+		)
+		_, err := m.broadcastSocket.Write(m.magicPacket)
+		if err != nil {
+			return err
+		}
+		time.AfterFunc(10*time.Minute, func() {
+			_, _ = m.pool.Delete(m.key)
+		})
 	}
 	return next.ServeHTTP(w, r)
 }
