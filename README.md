@@ -15,13 +15,13 @@ xcaddy build \
 
 The plugin implements a minimal HTTP handler directive that simply dispatches a WOL magic packet and then passes the request through unchanged to the next handler which may return a response to the client:
 
-```json
+```
 wake_on_lan <mac_address>
 ```
 
 As with any such directive, you have to tell Caddy where to put in the execution order of all directives. This is done with a global configuration directive in your Caddyfile:
 
-```json
+```
 {
     order wake_on_lan before respond
 }
@@ -35,7 +35,7 @@ One possible example use case is to reverse proxy requests to e.g. a NAS (using 
 
 To do so, we first issue a standard reverse proxy directive and then register an error handler that is called when this proxy request goes unanswered because the target is not reachable. It then calls the `caddy-wol` plugin to wake up the NAS and re-issues the reverse proxy directive, but this time with a longer timeout to allow for the boot process to finish. The configuration to do all of this, is really straight forward using built-in Caddy directives:
 
-```json
+```
 {
     order wake_on_lan before respond
 }
