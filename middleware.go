@@ -18,9 +18,10 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("wake_on_lan", parseCaddyfile)
 }
 
+// Middleware wakes up a target host on HTTP requests using wake-on-lan
 type Middleware struct {
+	// MAC address of the target host in a net.ParseMAC compatible format
 	MAC string `json:"mac,omitempty"`
-	// TODO: add more configuration (throttle time, target ip)
 
 	key             string
 	logger          *zap.Logger
@@ -29,6 +30,7 @@ type Middleware struct {
 	broadcastSocket net.Conn
 }
 
+// CaddyModule returns the Caddy module information.
 func (Middleware) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.wake_on_lan",
@@ -36,6 +38,8 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// Prepare the magic packet and the socket used to send it
+// Provision implements caddy.Provisioner.
 func (m *Middleware) Provision(ctx caddy.Context) error {
 	m.key = fmt.Sprintf("wol-%s", m.MAC)
 	m.logger = ctx.Logger(m)
@@ -56,6 +60,7 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	return nil
 }
 
+// ServeHTTP dispatches the prepared magic packet and transparently continues with the next http handler
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	_, throttled := m.pool.LoadOrStore(m.key, true)
 	if throttled {
@@ -78,6 +83,7 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 	return next.ServeHTTP(w, r)
 }
 
+// UnmarshalCaddyfile implements caddyfile.Unmarshaler.
 func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		if !d.Args(&m.MAC) {
@@ -87,10 +93,12 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
+// Cleanup closes the prepared broadcast socket
 func (m *Middleware) Cleanup() error {
 	return m.broadcastSocket.Close()
 }
 
+// parseCaddyfile unmarshals a caddyfile helper to a Middleware.
 func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
 	var m Middleware
 	err := m.UnmarshalCaddyfile(h.Dispenser)
