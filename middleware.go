@@ -18,10 +18,13 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("wake_on_lan", parseCaddyfile)
 }
 
-// Middleware wakes up a target host on HTTP requests using wake-on-lan
+// Middleware wakes up a target host on HTTP requests using wake-on-lan.
 type Middleware struct {
-	// MAC address of the target host in a net.ParseMAC compatible format
+	// MAC address of the target host in a net.ParseMAC compatible format.
 	MAC string `json:"mac,omitempty"`
+	// Broadcast address (<ip>:<port>) the magic packet should be sent to.
+	// Defaults to "255.255.255.255:9".
+	BroadcastAddress string `json:"broadcast_address,omitempty"`
 
 	key             string
 	logger          *zap.Logger
@@ -53,14 +56,15 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	if err != nil {
 		return err
 	}
-	m.broadcastSocket, err = net.Dial("udp", "255.255.255.255:9")
+	m.broadcastSocket, err = net.Dial("udp", m.BroadcastAddress)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-// ServeHTTP dispatches the prepared magic packet and transparently continues with the next http handler
+// ServeHTTP dispatches the prepared magic packet and transparently
+// continues with the next http handler.
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	_, throttled := m.pool.LoadOrStore(m.key, true)
 	if throttled {
@@ -86,14 +90,21 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
 func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
-		if !d.Args(&m.MAC) {
-			return d.ArgErr()
+		args := d.RemainingArgs()
+
+		switch len(args) {
+		case 1:
+			m.MAC, m.BroadcastAddress = args[0], "255.255.255.255:9"
+		case 2:
+			m.MAC, m.BroadcastAddress = args[0], args[1]
+		default:
+			return d.Err("unexpected number of arguments")
 		}
 	}
 	return nil
 }
 
-// Cleanup closes the prepared broadcast socket
+// Cleanup closes the prepared broadcast socket.
 func (m *Middleware) Cleanup() error {
 	return m.broadcastSocket.Close()
 }

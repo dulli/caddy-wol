@@ -16,12 +16,12 @@ xcaddy build \
 The plugin implements a minimal HTTP handler directive that simply dispatches a WOL magic packet and then passes the request through unchanged to the next handler which may return a response to the client:
 
 ```groovy
-wake_on_lan <mac_address>
+wake_on_lan <mac_address> [<broadcast_address>]
 ```
 
 As with any such directive, you have to tell Caddy where to put in the execution order of all directives. This is done with a global configuration directive in your `Caddyfile`:
 
-```
+```groovy
 order wake_on_lan before respond
 ```
 
