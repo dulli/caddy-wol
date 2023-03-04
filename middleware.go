@@ -74,6 +74,10 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 		}
 	} else {
 		m.logger.Info("dispatched magic packet",
+			zap.String("remote", r.RemoteAddr),
+			zap.String("host", r.Host),
+			zap.String("uri", r.RequestURI),
+			zap.String("broadcast", m.BroadcastAddress),
 			zap.String("mac", m.MAC),
 		)
 		_, err := m.broadcastSocket.Write(m.magicPacket)
