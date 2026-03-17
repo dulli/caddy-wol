@@ -73,8 +73,10 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 			return err
 		}
 	} else {
+		clientIP := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string)
 		m.logger.Info("dispatched magic packet",
-			zap.String("remote", r.RemoteAddr),
+			zap.String("client_ip", clientIP),
+			zap.String("remote_ip", r.RemoteAddr),
 			zap.String("host", r.Host),
 			zap.String("uri", r.RequestURI),
 			zap.String("broadcast", m.BroadcastAddress),
