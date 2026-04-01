@@ -3,7 +3,7 @@ module github.com/dulli/caddy-wol
 go 1.25.0
 
 require (
-	github.com/caddyserver/caddy/v2 v2.11.1
+	github.com/caddyserver/caddy/v2 v2.11.2
 	go.uber.org/zap v1.27.1
 )
 
