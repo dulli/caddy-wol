@@ -16,8 +16,12 @@ xcaddy build \
 The plugin implements a minimal HTTP handler directive that simply dispatches a WOL magic packet and then passes the request through unchanged to the next handler which may return a response to the client:
 
 ```groovy
-wake_on_lan <mac_address> [<broadcast_address>]
+wake_on_lan <mac_address> [<broadcast_address>] {
+    throttle <duration>
+}
 ```
+
+The block is optional. `throttle` sets the minimum time between two magic packets for the same MAC and broadcast address and accepts any Caddy duration like `30s` or `5m`. It defaults to `10m`.
 
 As with any such directive, you have to tell Caddy where to put in the execution order of all directives. This is done with a global configuration directive in your `Caddyfile`:
 
@@ -25,7 +29,9 @@ As with any such directive, you have to tell Caddy where to put in the execution
 order wake_on_lan before respond
 ```
 
-Internally, the magic packets are throttled to be sent at most once every 10 minutes per remote host, even if more frequent requests arrive at the server, as sending the packet once is of course enough to wake up the remote host.
+Internally, the magic packets are throttled to be sent at most once per `throttle` window (10 minutes by default) per remote host, even if more frequent requests arrive at the server, as sending the packet once is usually enough to wake up the remote host. If your host goes back to sleep quickly after a wake that did not lead to any real work, lower the `throttle` so that the next request can wake it up again right away. A magic packet is only 102 bytes, so sending one every few seconds does no harm.
+
+The throttle is shared by every `wake_on_lan` directive that targets the same MAC and broadcast address, and it is kept across config reloads, so reloading Caddy does not cause an extra magic packet. It is held in memory only, so restarting Caddy resets it.
 
 ## Example Configuration
 
