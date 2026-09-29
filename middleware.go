@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -11,6 +12,21 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
+)
+
+// defaultThrottle is used when no throttle is configured.
+const defaultThrottle = 10 * time.Minute
+
+// The throttle state lives at package level, rather than in the Middleware,
+// so that it survives config reloads: a reload provisions fresh handlers,
+// but must not reset the time since the last packet.
+var (
+	throttleMu sync.Mutex
+	// lastSent maps a MAC and broadcast address pair to the time the last
+	// magic packet was sent to it.
+	lastSent = map[string]time.Time{}
+	// now is the clock used by the throttle, replaceable in tests.
+	now = time.Now
 )
 
 func init() {
@@ -25,10 +41,12 @@ type Middleware struct {
 	// Broadcast address (<ip>:<port>) the magic packet should be sent to.
 	// Defaults to "255.255.255.255:9".
 	BroadcastAddress string `json:"broadcast_address,omitempty"`
+	// Minimum time between two magic packets for the same MAC and broadcast
+	// address. Defaults to 10 minutes.
+	Throttle caddy.Duration `json:"throttle,omitempty"`
 
 	key             string
 	logger          *zap.Logger
-	pool            *caddy.UsagePool
 	magicPacket     []byte
 	broadcastSocket net.Conn
 }
@@ -44,14 +62,22 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 // Prepare the magic packet and the socket used to send it
 // Provision implements caddy.Provisioner.
 func (m *Middleware) Provision(ctx caddy.Context) error {
-	m.key = fmt.Sprintf("wol-%s", m.MAC)
 	m.logger = ctx.Logger(m)
-	m.pool = caddy.NewUsagePool()
+
+	if m.Throttle == 0 {
+		m.Throttle = caddy.Duration(defaultThrottle)
+	}
+	if m.Throttle < 0 {
+		return fmt.Errorf("throttle must be positive, got %s", time.Duration(m.Throttle))
+	}
 
 	mac, err := net.ParseMAC(m.MAC)
 	if err != nil {
 		return err
 	}
+	// Key on the parsed MAC so that different spellings of the same address
+	// share one throttle.
+	m.key = fmt.Sprintf("wol-%s-%s", mac, m.BroadcastAddress)
 	m.magicPacket = BuildMagicPacket(mac)
 	if err != nil {
 		return err
@@ -66,14 +92,38 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 // ServeHTTP dispatches the prepared magic packet and transparently
 // continues with the next http handler.
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	_, throttled := m.pool.LoadOrStore(m.key, true)
-	if throttled {
-		_, err := m.pool.Delete(m.key)
-		if err != nil {
-			return err
-		}
-	} else {
-		clientIP := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string)
+	if err := m.wake(r); err != nil {
+		return err
+	}
+	return next.ServeHTTP(w, r)
+}
+
+// wake sends the magic packet unless one was sent to the same MAC and
+// broadcast address within the throttle window. The decision, the record and
+// the send happen under one lock, so concurrent requests cannot both send.
+// Logging happens after the lock is released, so a slow log sink cannot hold
+// up requests for other targets.
+func (m Middleware) wake(r *http.Request) error {
+	remaining, err := m.send()
+	switch {
+	case err != nil:
+		m.logger.Error("failed to dispatch magic packet",
+			zap.String("host", r.Host),
+			zap.String("uri", r.RequestURI),
+			zap.String("broadcast", m.BroadcastAddress),
+			zap.String("mac", m.MAC),
+			zap.Error(err),
+		)
+	case remaining > 0:
+		m.logger.Debug("throttled magic packet",
+			zap.String("host", r.Host),
+			zap.String("uri", r.RequestURI),
+			zap.String("broadcast", m.BroadcastAddress),
+			zap.String("mac", m.MAC),
+			zap.Duration("remaining", remaining),
+		)
+	default:
+		clientIP, _ := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string)
 		m.logger.Info("dispatched magic packet",
 			zap.String("client_ip", clientIP),
 			zap.String("remote_ip", r.RemoteAddr),
@@ -82,15 +132,34 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 			zap.String("broadcast", m.BroadcastAddress),
 			zap.String("mac", m.MAC),
 		)
-		_, err := m.broadcastSocket.Write(m.magicPacket)
-		if err != nil {
-			return err
-		}
-		time.AfterFunc(10*time.Minute, func() {
-			_, _ = m.pool.Delete(m.key)
-		})
 	}
-	return next.ServeHTTP(w, r)
+	return err
+}
+
+// send decides, records and sends under the throttle lock. It returns the
+// time left in the throttle window if the packet was held back, or the error
+// of a failed write.
+func (m Middleware) send() (remaining time.Duration, err error) {
+	throttleMu.Lock()
+	defer throttleMu.Unlock()
+
+	t := now()
+	last, seen := lastSent[m.key]
+	if elapsed := t.Sub(last); seen && elapsed < time.Duration(m.Throttle) {
+		return time.Duration(m.Throttle) - elapsed, nil
+	}
+
+	lastSent[m.key] = t
+	if _, err := m.broadcastSocket.Write(m.magicPacket); err != nil {
+		// Nothing was sent, so do not hold back the next attempt.
+		if seen {
+			lastSent[m.key] = last
+		} else {
+			delete(lastSent, m.key)
+		}
+		return 0, err
+	}
+	return 0, nil
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -106,12 +175,39 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		default:
 			return d.Err("unexpected number of arguments")
 		}
+
+		for d.NextBlock(0) {
+			switch d.Val() {
+			case "throttle":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dur, err := caddy.ParseDuration(d.Val())
+				if err != nil {
+					return d.Errf("invalid throttle duration %q: %v", d.Val(), err)
+				}
+				if dur <= 0 {
+					return d.Errf("throttle must be positive, got %s", d.Val())
+				}
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Throttle = caddy.Duration(dur)
+			default:
+				return d.Errf("unrecognized subdirective %q", d.Val())
+			}
+		}
 	}
 	return nil
 }
 
 // Cleanup closes the prepared broadcast socket.
 func (m *Middleware) Cleanup() error {
+	// Caddy also cleans up modules whose provisioning failed, before any
+	// socket was opened.
+	if m.broadcastSocket == nil {
+		return nil
+	}
 	return m.broadcastSocket.Close()
 }
 
